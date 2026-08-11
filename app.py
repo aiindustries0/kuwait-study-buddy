@@ -10,9 +10,16 @@ load_dotenv()
 
 def create_app():
     app = Flask(__name__, instance_relative_config=True)
+    secret_key = os.environ.get("FLASK_SECRET_KEY")
+    if not secret_key:
+        if os.environ.get("FLASK_ENV", "development").lower() == "production":
+            raise RuntimeError("FLASK_SECRET_KEY must be set in production")
+        secret_key = "dev-only-secret-key-not-for-production"
     app.config.from_mapping(
-        SECRET_KEY=os.environ.get("FLASK_SECRET_KEY", "dev-only-change-me"),
-        DATABASE=os.environ.get("DATABASE_PATH", os.path.join(app.instance_path, "study_buddy.sqlite3")),
+        SECRET_KEY=secret_key,
+        DATABASE=os.environ.get(
+            "DATABASE_PATH", os.path.join(app.instance_path, "study_buddy.sqlite3")
+        ),
     )
     os.makedirs(app.instance_path, exist_ok=True)
     init_db(app.config["DATABASE"])
