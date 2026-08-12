@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import time
 from datetime import date
 
 import requests
@@ -172,17 +173,52 @@ def gemini_call(prompt, json_mode=False):
     if not key: return None, AI_NOT_CONFIGURED
     payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.35}}
     if json_mode: payload["generationConfig"]["responseMimeType"] = "application/json"
-    try:
-        response = requests.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent", params={"key": key}, json=payload, timeout=45); response.raise_for_status(); data = response.json()
-        text = "".join(part.get("text", "") for part in data.get("candidates", [])[0].get("content", {}).get("parts", [])).strip()
-        return (text, None) if text else (None, "The AI did not return an answer. Please try again.")
-    except (requests.RequestException, ValueError, IndexError, AttributeError, KeyError): return None, "The AI is taking a break. Please try again in a moment."
+
+    def api_error_message(response):
+        try:
+            details = response.json()
+        except (ValueError, TypeError):
+            details = None
+        if isinstance(details, dict):
+            error = details.get("error", details)
+            if isinstance(error, dict):
+                message = error.get("message") or error.get("status")
+            else:
+                message = str(error) if error else None
+            if message: return str(message)
+        return (getattr(response, "text", "") or getattr(response, "reason", "") or "Unknown API error").strip()
+
+    for attempt in range(3):
+        try:
+            response = requests.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent", params={"key": key}, json=payload, timeout=45)
+            if response.status_code == 429:
+                if attempt < 2:
+                    time.sleep(2)
+                    continue
+                return None, "AI is rate limited — wait a minute and try again"
+            if 500 <= response.status_code <= 599:
+                if attempt < 2:
+                    time.sleep(2)
+                    continue
+                return None, f"AI request failed (HTTP {response.status_code}): {api_error_message(response)}"
+            if not response.ok:
+                return None, f"AI request failed (HTTP {response.status_code}): {api_error_message(response)}"
+            data = response.json()
+            text = "".join(part.get("text", "") for part in data.get("candidates", [])[0].get("content", {}).get("parts", [])).strip()
+            return (text, None) if text else (None, "The AI did not return an answer. Please try again.")
+        except requests.RequestException as exc:
+            return None, f"AI request failed: {exc or 'network error'}"
+        except (ValueError, IndexError, AttributeError, KeyError) as exc:
+            return None, f"AI response parsing failed: {exc}"
 
 
 def extract_json(text):
     cleaned = text.strip()
     if cleaned.startswith("```"):
-        lines = cleaned.splitlines(); cleaned = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:]).strip()
+        lines = cleaned.splitlines()
+        if lines and lines[0].strip().startswith("```"): lines = lines[1:]
+        if lines and lines[-1].strip() == "```": lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
     try: return json.loads(cleaned)
     except json.JSONDecodeError:
         decoder = json.JSONDecoder()
@@ -203,7 +239,6 @@ def normalize_question(raw):
         if not isinstance(choices, list) or len(choices) != 4: return None
         choices = [str(x).strip() for x in choices]
         if any(not x for x in choices) or len(set(choices)) != 4: return None
-        kind = "multiple_choice"
     else: return None
     if not text or not explanation: return None
     answer = raw.get("answer", raw.get("correct_answer"))
