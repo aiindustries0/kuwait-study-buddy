@@ -188,12 +188,12 @@ def gemini_call(prompt, json_mode=False):
             if message: return str(message)
         return (getattr(response, "text", "") or getattr(response, "reason", "") or "Unknown API error").strip()
 
-    for attempt in range(3):
+    for attempt in range(4):
         try:
             response = requests.post("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent", params={"key": key}, json=payload, timeout=45)
             if response.status_code == 429:
-                if attempt < 2:
-                    time.sleep(2)
+                if attempt < 3:
+                    time.sleep((15, 30, 60)[attempt])
                     continue
                 return None, "AI is rate limited — wait a minute and try again"
             if 500 <= response.status_code <= 599:
